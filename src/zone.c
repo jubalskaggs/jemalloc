@@ -94,7 +94,7 @@ static pid_t zone_force_lock_pid = -1;
 /******************************************************************************/
 /* Function prototypes for non-inline static functions. */
 
-static size_t	zone_size(malloc_zone_t *zone, const void *ptr);
+/*static size_t	zone_size(malloc_zone_t *zone, const void *ptr);
 static void	*zone_malloc(malloc_zone_t *zone, size_t size);
 static void	*zone_calloc(malloc_zone_t *zone, size_t num, size_t size);
 static void	*zone_valloc(malloc_zone_t *zone, size_t size);
@@ -122,14 +122,14 @@ static void	zone_force_unlock(malloc_zone_t *zone);
 static void	zone_statistics(malloc_zone_t *zone,
     malloc_statistics_t *stats);
 static boolean_t	zone_locked(malloc_zone_t *zone);
-static void	zone_reinit_lock(malloc_zone_t *zone);
+static void	zone_reinit_lock(malloc_zone_t *zone);*/
 
 /******************************************************************************/
 /*
  * Functions.
  */
 
-static size_t
+size_t
 zone_size(malloc_zone_t *zone, const void *ptr) {
 	/*
 	 * There appear to be places within Darwin (such as setenv(3)) that
@@ -143,17 +143,17 @@ zone_size(malloc_zone_t *zone, const void *ptr) {
 	return ivsalloc(tsdn_fetch(), ptr);
 }
 
-static void *
+void *
 zone_malloc(malloc_zone_t *zone, size_t size) {
 	return je_malloc(size);
 }
 
-static void *
+void *
 zone_calloc(malloc_zone_t *zone, size_t num, size_t size) {
 	return je_calloc(num, size);
 }
 
-static void *
+void *
 zone_valloc(malloc_zone_t *zone, size_t size) {
 	void *ret = NULL; /* Assignment avoids useless compiler warning. */
 
@@ -162,7 +162,7 @@ zone_valloc(malloc_zone_t *zone, size_t size) {
 	return ret;
 }
 
-static void
+void
 zone_free(malloc_zone_t *zone, void *ptr) {
 	if (ivsalloc(tsdn_fetch(), ptr) != 0) {
 		je_free(ptr);
@@ -172,7 +172,7 @@ zone_free(malloc_zone_t *zone, void *ptr) {
 	free(ptr);
 }
 
-static void *
+void *
 zone_realloc(malloc_zone_t *zone, void *ptr, size_t size) {
 	if (ivsalloc(tsdn_fetch(), ptr) != 0) {
 		return je_realloc(ptr, size);
@@ -181,7 +181,7 @@ zone_realloc(malloc_zone_t *zone, void *ptr, size_t size) {
 	return realloc(ptr, size);
 }
 
-static void *
+void *
 zone_memalign(malloc_zone_t *zone, size_t alignment, size_t size) {
 	void *ret = NULL; /* Assignment avoids useless compiler warning. */
 
@@ -190,7 +190,7 @@ zone_memalign(malloc_zone_t *zone, size_t alignment, size_t size) {
 	return ret;
 }
 
-static void
+void
 zone_free_definite_size(malloc_zone_t *zone, void *ptr, size_t size) {
 	size_t alloc_size;
 
@@ -204,13 +204,13 @@ zone_free_definite_size(malloc_zone_t *zone, void *ptr, size_t size) {
 	free(ptr);
 }
 
-static void
+void
 zone_destroy(malloc_zone_t *zone) {
 	/* This function should never be called. */
 	not_reached();
 }
 
-static unsigned
+unsigned
 zone_batch_malloc(struct _malloc_zone_t *zone, size_t size, void **results,
     unsigned num_requested) {
 	unsigned i;
@@ -224,7 +224,7 @@ zone_batch_malloc(struct _malloc_zone_t *zone, size_t size, void **results,
 	return i;
 }
 
-static void
+void
 zone_batch_free(struct _malloc_zone_t *zone, void **to_be_freed,
     unsigned num_to_be_freed) {
 	unsigned i;
@@ -235,12 +235,12 @@ zone_batch_free(struct _malloc_zone_t *zone, void **to_be_freed,
 	}
 }
 
-static size_t
+size_t
 zone_pressure_relief(struct _malloc_zone_t *zone, size_t goal) {
 	return 0;
 }
 
-static size_t
+size_t
 zone_good_size(malloc_zone_t *zone, size_t size) {
 	if (size == 0) {
 		size = 1;
@@ -248,27 +248,27 @@ zone_good_size(malloc_zone_t *zone, size_t size) {
 	return sz_s2u(size);
 }
 
-static kern_return_t
+kern_return_t
 zone_enumerator(task_t task, void *data, unsigned type_mask,
     vm_address_t zone_address, memory_reader_t reader,
     vm_range_recorder_t recorder) {
 	return KERN_SUCCESS;
 }
 
-static boolean_t
+boolean_t
 zone_check(malloc_zone_t *zone) {
 	return true;
 }
 
-static void
+void
 zone_print(malloc_zone_t *zone, boolean_t verbose) {
 }
 
-static void
+void
 zone_log(malloc_zone_t *zone, void *address) {
 }
 
-static void
+void
 zone_force_lock(malloc_zone_t *zone) {
 	if (isthreaded) {
 		/*
@@ -281,7 +281,7 @@ zone_force_lock(malloc_zone_t *zone) {
 	}
 }
 
-static void
+void
 zone_force_unlock(malloc_zone_t *zone) {
 	/*
 	 * zone_force_lock and zone_force_unlock are the entry points to the
@@ -306,7 +306,7 @@ zone_force_unlock(malloc_zone_t *zone) {
 	}
 }
 
-static void
+void
 zone_statistics(malloc_zone_t *zone, malloc_statistics_t *stats) {
 	/* We make no effort to actually fill the values */
 	stats->blocks_in_use = 0;
@@ -315,20 +315,20 @@ zone_statistics(malloc_zone_t *zone, malloc_statistics_t *stats) {
 	stats->size_allocated = 0;
 }
 
-static boolean_t
+boolean_t
 zone_locked(malloc_zone_t *zone) {
 	/* Pretend no lock is being held */
 	return false;
 }
 
-static void
+void
 zone_reinit_lock(malloc_zone_t *zone) {
 	/* As of OSX 10.12, this function is only used when force_unlock would
 	 * be used if the zone version were < 9. So just use force_unlock. */
 	zone_force_unlock(zone);
 }
 
-static void
+void
 zone_init(void) {
 	jemalloc_zone.size = zone_size;
 	jemalloc_zone.malloc = zone_malloc;
@@ -433,7 +433,11 @@ zone_promote(void) {
 	} while (zone != &jemalloc_zone);
 }
 
-JEMALLOC_ATTR(constructor)
+/*malloc_zone_t *get_jemalloc_zone(void) {
+    return &jemalloc_zone;
+}*/
+
+// JEMALLOC_ATTR(constructor)
 void
 zone_register(void) {
 	/*
@@ -465,5 +469,5 @@ zone_register(void) {
 	malloc_zone_register(&jemalloc_zone);
 
 	/* Promote the custom zone to be default. */
-	zone_promote();
+	// zone_promote();
 }
