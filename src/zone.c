@@ -129,6 +129,12 @@ static void	zone_reinit_lock(malloc_zone_t *zone);*/
  * Functions.
  */
 
+malloc_zone_t *sActualZone;
+
+__used void set_actual_zone(malloc_zone_t *zone) {
+    sActualZone = zone;
+}
+
 size_t
 zone_size(malloc_zone_t *zone, const void *ptr) {
 	/*
@@ -169,7 +175,7 @@ zone_free(malloc_zone_t *zone, void *ptr) {
 		return;
 	}
 
-	free(ptr);
+    sActualZone->free(sActualZone, ptr);
 }
 
 void *
@@ -178,7 +184,7 @@ zone_realloc(malloc_zone_t *zone, void *ptr, size_t size) {
 		return je_realloc(ptr, size);
 	}
 
-	return realloc(ptr, size);
+	return sActualZone->realloc(sActualZone, ptr, size);
 }
 
 void *
@@ -201,7 +207,7 @@ zone_free_definite_size(malloc_zone_t *zone, void *ptr, size_t size) {
 		return;
 	}
 
-	free(ptr);
+    sActualZone->free(sActualZone, ptr);
 }
 
 void
