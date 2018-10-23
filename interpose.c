@@ -55,6 +55,10 @@ DYLD_INTERPOSE(mje_valloc, valloc);
 DYLD_INTERPOSE(mje_free, free);
 DYLD_INTERPOSE(mje_posix_memalign, posix_memalign);
 
+__used __attribute__((constructor)) void asf() {
+    printf("go\n\n\n");
+}
+
 // malloc_create_zone, malloc_destroy_zone, malloc_default_zone, malloc_default_purgeable_zone, malloc_make_purgeable, malloc_make_nonpurgeable, malloc_set_zone_name, posix_memalign
 //DYLD_INTERPOSE(je_batch_malloc, free);
 //DYLD_INTERPOSE(je_batch_free, free);
