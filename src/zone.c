@@ -421,25 +421,6 @@ static bool environmentIsWithinMax() {
     return maxDyldVersionNumber >= dyldVersionNumber && strcmp(maxKernelVersion, u.release) >= 0;
 }
 
-int itoaa(int num, char* str)
-{
-    char *start = str;
-    while(num) {
-        *str = num % 10 + '0';
-        num /= 10;
-        str++;
-    }
-    int len = str - start;
-    for (int i = 0; i < len / 2; i++) {
-        char tmp = start[i];
-        int right = len - i - 1;
-        start[i] = start[right];
-        start[right] = tmp;
-    }
-    *str = '\0';
-    return len + 1;
-}
-
 // jemalloc is built with a specific page size: 16kb, i.e. 2 ** 14
 // This has been the page size for iPhones for years, but in the future it's possible that Apple could change it
 // I think binaries can also be forced to have a certain page size
@@ -447,19 +428,6 @@ static inline bool useJemalloc() {
     if (unlikely(sInternalUseJemalloc == LazyBooleanUninited)) {
         // fix this
         bool correctPageSize = pageSize() == (1 << 14);
-        char bb[4000] = {0};
-        char *ptr = bb;
-        char numStr[500] = {0};
-        struct utsname u = {0};
-        int res = uname(&u);
-        // ptr = stpcpy(ptr, correctPageSize ? "good page" : "bad page");
-        ptr = stpcpy(ptr, "dyld: ");
-        itoaa(dyldVersionNumber, numStr);
-        ptr = stpcpy(ptr, numStr);
-        ptr = stpcpy(ptr, " num: ");
-        ptr = stpcpy(ptr, u.release);
-        write(STDOUT_FILENO, bb, ptr - bb);
-        // write(STDOUT_FILENO, "page", sizeof(warning) - 1);
         sInternalUseJemalloc = (correctPageSize && environmentIsWithinMax()) ? LazyBooleanTrue : LazyBooleanFalse;
         if (sInternalUseJemalloc == LazyBooleanFalse) {
             // Don't use printf, NSLog, etc., because they may call malloc themselves
