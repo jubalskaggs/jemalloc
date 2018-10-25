@@ -5,7 +5,7 @@ Dir.chdir(__dir__)
 
 dev = `xcode-select --print-path 2>/dev/null`.chomp
 
-debug = ARGV.include?("--debug")
+debug = true # ARGV.include?("--debug")
 
 archs = debug ? ["arm64"] : ["x86_64", "arm64"]
 
@@ -29,6 +29,7 @@ end
 
 puts "Using #{min_version} as the minimum iOS version, feel free to change min_version in the code to something else\n\n"
 
+ENV.delete_if { true }
 archs.each do |arch|
   sdk = {"arm64" => "iphoneos", "x86_64" => "iphonesimulator"}[arch]
   sdk_root = `xcodebuild -version -sdk #{sdk} 2>/dev/null`.split("\n").detect do |line|

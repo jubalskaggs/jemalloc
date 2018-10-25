@@ -6,6 +6,8 @@
 #include <sys/sysctl.h>
 #include <stdatomic.h>
 #include <sys/utsname.h>
+#include <string.h>
+#include <stdlib.h>
 
 #ifndef JEMALLOC_ZONE
 #  error "This source file is for zones on Darwin (OS X)."
@@ -399,79 +401,69 @@ static LazyBoolean sInternalUseJemalloc = LazyBooleanUninited;
 // Gets set by dyld
 extern double dyldVersionNumber;
 
-static double dyldMaxVersionNumber = 10000;
-static const char *maxKernel = "18.0.0";
+static double maxDyldVersionNumber = 625.110000 + 0.000001; // Give it a bit extra to be safe
+static const char *maxKernelVersion = "18.0.0";
 
-bool copyInKernelVersion(char buffer[_SYS_NAMELEN]) {
+// Run this in the debugger to see what it is for your iPhone
+__used void printEnvironment() {
     struct utsname u = {0};
     int res = uname(&u);
-    if (res) {
-        strcpy(buffer, u.release);
-        return true;
-    } else {
+    printf("%lf, %s", dyldVersionNumber, u.release);
+}
+
+static bool environmentIsWithinMax() {
+    struct utsname u = {0};
+    char buffer[_SYS_NAMELEN];
+    int res = uname(&u);
+    if (res == -1) {
         return false;
     }
+    return maxDyldVersionNumber >= dyldVersionNumber && strcmp(maxKernelVersion, u.release) >= 0;
 }
 
-// Signal interrupts could cause the file operations here to fail, but oh well
-int openOsVersionFile(int mode) {
-    const char *home = getenv("HOME");
-    size_t homeLength = strlen(home);
-    const char *name = "jemalloc_os_version.txt";
-    size_t nameLength = strlen(name);
-    size_t length = homeLength + nameLength + 1 /*separator*/ + 1 /*null terminator*/;
-    char path[length];
-    strcpy(path, home);
-    path[homeLength] = '/';
-    strcpy(&(path[homeLength + 1]), name);
-    path[homeLength + nameLength + 1] = '\0';
-    return open(path, mode);
-}
-
-void writeEnvironmentToDisk() {
-    int fd = openOsVersionFile(O_TRUNC | O_WRONLY | O_CREAT);
-    if (fd == -1) {
-        return;
+int itoaa(int num, char* str)
+{
+    char *start = str;
+    while(num) {
+        *str = num % 10 + '0';
+        num /= 10;
+        str++;
     }
-    int bytesWritten = write(fd, &dyldVersionNumber, sizeof(dyldVersionNumber));
-    if (bytesWritten == sizeof(dyldVersionNumber)) {
-        char kernelVersion[_SYS_NAMELEN] = {0};
-        copyInKernelVersion(kernelVersion);
-        size_t kernelVersionLength = strlen(kernelVersion) + 1;
-        write(fd, kernelVersion, kernelVersionLength);
-        // Uncomment this line to update this info
-        // printf("dyld version: %lf, kernel version: %s\n", dyldVersionNumber, kernelVersion);
+    int len = str - start;
+    for (int i = 0; i < len / 2; i++) {
+        char tmp = start[i];
+        int right = len - i - 1;
+        start[i] = start[right];
+        start[right] = tmp;
     }
-    close(fd);
-}
-
-static void versionFileIsCurrent() {
-    bool fileSuccess = false;
-    int fd = openOsVersionFile(O_RDONLY);
-    if (fd != -1) {
-        sInternalUseJemalloc = LazyBooleanFalse;
-        fileSuccess = true;
-        char newKernelVersion[_SYS_NAMELEN] = {0};
-        read(fd, newKernelVersion, sizeof(newKernelVersion));
-        char oldKernelVersion[_SYS_NAMELEN] = {0};
-        copyInKernelVersion(oldKernelVersion);
-        if (strcmp(newKernelVersion, oldKernelVersion) >= 0) {
-            fileSuccess = true;
-        }
-    }
-    close(fd);
+    *str = '\0';
+    return len + 1;
 }
 
 // jemalloc is built with a specific page size: 16kb, i.e. 2 ** 14
-// this has been the page size for iPhones for years, but in the future it's possible that Apple could change it
-// it also may be possible for a binary to be built with a different page size
+// This has been the page size for iPhones for years, but in the future it's possible that Apple could change it
+// I think binaries can also be forced to have a certain page size
 static inline bool useJemalloc() {
     if (unlikely(sInternalUseJemalloc == LazyBooleanUninited)) {
         // fix this
-        sInternalUseJemalloc = (pageSize() == (1 << 14)) ? LazyBooleanTrue : LazyBooleanFalse;
+        bool correctPageSize = pageSize() == (1 << 14);
+        char bb[4000] = {0};
+        char *ptr = bb;
+        char numStr[500] = {0};
+        struct utsname u = {0};
+        int res = uname(&u);
+        // ptr = stpcpy(ptr, correctPageSize ? "good page" : "bad page");
+        ptr = stpcpy(ptr, "dyld: ");
+        itoaa(dyldVersionNumber, numStr);
+        ptr = stpcpy(ptr, numStr);
+        ptr = stpcpy(ptr, " num: ");
+        ptr = stpcpy(ptr, u.release);
+        write(STDOUT_FILENO, bb, ptr - bb);
+        // write(STDOUT_FILENO, "page", sizeof(warning) - 1);
+        sInternalUseJemalloc = (correctPageSize && environmentIsWithinMax()) ? LazyBooleanTrue : LazyBooleanFalse;
         if (sInternalUseJemalloc == LazyBooleanFalse) {
             // Don't use printf, NSLog, etc., because they may call malloc themselves
-            const char *warning = "Warning: jemalloc only works with a page size of 16kb, using the system allocator instead\n";
+            char warning[] = "WARNING: not using the jemalloc because either the page size is wrong or the environment is too new\n";
             write(STDOUT_FILENO, warning, sizeof(warning) - 1);
         }
     }
@@ -555,6 +547,7 @@ INTERCEPTOR_RETURN(void *, realloc, void *, ptr, size_t, size)
 
 // Other functions call directly in and don't go through a zone fn
 INTERCEPTOR_RETURN(void *, malloc, size_t, size)
+    abort();
     return je_malloc(size);
 }
 
