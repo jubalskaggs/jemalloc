@@ -5,7 +5,9 @@ Dir.chdir(__dir__)
 
 dev = `xcode-select --print-path 2>/dev/null`.chomp
 
-archs = ["x86_64", "arm64"]
+debug = ARGV.include?("--debug")
+
+archs = debug ? ["arm64"] : ["x86_64", "arm64"]
 
 min_version = "10.0"
 triple = "aarch64-apple-ios"
@@ -38,7 +40,8 @@ archs.each do |arch|
   ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -miphoneos-version-min=#{min_version}"
   ENV["LDFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -Wl,-install_name,@rpath/libjemalloc.2.dylib -Wl,-dead_strip -miphoneos-version-min=#{min_version}"
 
-  success = run("make clean && ./configure --disable-cxx --disable-syscall --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4")
+  cmd = debug ? "make -j 4" : "make clean && ./configure --disable-cxx --disable-syscall --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
+  success = run(cmd)
   raise "Failure" unless success
   `cp #{$static_lib_path} #{tmp_static_lib_path(arch)}`
   `cp #{$dylib_path} #{tmp_dylib_path(arch)}`

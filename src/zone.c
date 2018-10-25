@@ -3,8 +3,9 @@
 
 #include "jemalloc/internal/assert.h"
 #include <malloc/malloc.h>
-#include <dispatch/dispatch.h>
 #include <sys/sysctl.h>
+#include <stdatomic.h>
+#include <sys/utsname.h>
 
 #ifndef JEMALLOC_ZONE
 #  error "This source file is for zones on Darwin (OS X)."
@@ -43,9 +44,13 @@ static void	zone_statistics(malloc_zone_t *zone,
 static boolean_t	zone_locked(malloc_zone_t *zone);
 static void	zone_reinit_lock(malloc_zone_t *zone);
 
-extern malloc_zone_t *originalDefaultZone(void);
+static malloc_zone_t *originalDefaultZone(void);
 
 static pid_t zone_force_lock_pid = -1;
+static bool useJemalloc();
+
+static pthread_mutex_t replaceSystemMallocLock = PTHREAD_MUTEX_INITIALIZER;
+static _Atomic(bool) sMallocWasReplaced = false;
 
 /******************************************************************************/
 /*
@@ -73,6 +78,19 @@ zone_malloc(malloc_zone_t *zone, size_t size) {
 
 static void *
 zone_calloc(malloc_zone_t *zone, size_t num, size_t size) {
+    /*if (unlikely(...)) {
+        // Hack: dlsym calls calloc before REAL(calloc) is retrieved from dlsym.
+        size_t alignment = 16;
+        const size_t kCallocPoolSize = 65536;
+        static void *calloc_memory_for_dlsym[kCallocPoolSize];
+        static size_t allocated;
+        size_t size_in_words = ((num * size) + alignment) / alignment;
+        void *mem = (void*)&calloc_memory_for_dlsym[allocated];
+        allocated += size_in_words;
+        assert(allocated <= kCallocPoolSize);
+        return mem;
+    }*/
+
 	return je_calloc(num, size);
 }
 
@@ -249,10 +267,37 @@ __attribute__((section("__DATA, __interpose"))) = { \
 (const void *)(func_name) } \
 }
 
-#define INTERCEPTOR(ret_type, func, ...) \
-ret_type WRAP(func)(__VA_ARGS__); \
+#define GET_MACRO(_0, _1, _2, _3, _4, _5, _6, NAME, ...) NAME
+#define ODDS0()
+#define ODDS1(a)
+#define ODDS2(a, b) b
+#define ODDS4(a, b, c, d) b, d
+#define ODDS6(a, b, c, d, e, f) b, d, f
+#define ODDS(...) GET_MACRO(_0, ##__VA_ARGS__, ODDS6, _, ODDS4, _, ODDS2, ODDS1, ODDS0)(__VA_ARGS__)
+
+#define PAIRS0()
+#define PAIRS1(a)
+#define PAIRS2(a, b) a b
+#define PAIRS4(a, b, c, d) a b, c d
+#define PAIRS6(a, b, c, d, e, f)  a b, c d, e f
+#define PAIRS(...) GET_MACRO(_0, ##__VA_ARGS__, PAIRS6, _, PAIRS4, _, PAIRS2, PAIRS1, PAIRS0)(__VA_ARGS__)
+
+#define INTERCEPTOR_VOID(ret_type, func, ...) \
+ret_type WRAP(func)(PAIRS(__VA_ARGS__)); \
 INTERPOSER(func); \
-ret_type WRAP(func)(__VA_ARGS__)
+ret_type WRAP(func)(PAIRS(__VA_ARGS__)) { \
+if (unlikely(!useJemalloc())) { \
+    REAL(func)(ODDS(__VA_ARGS__)); \
+    return; \
+}
+
+#define INTERCEPTOR_RETURN(ret_type, func, ...) \
+ret_type WRAP(func)(PAIRS(__VA_ARGS__)); \
+INTERPOSER(func); \
+ret_type WRAP(func)(PAIRS(__VA_ARGS__)) { \
+if (unlikely(!useJemalloc())) { \
+    return REAL(func)(ODDS(__VA_ARGS__)); \
+}
 
 // Similar code is used in Google Perftools,
 // https://github.com/gperftools/gperftools.
@@ -313,55 +358,136 @@ MacosVersion GetMacosVersionInternal() {
 }
 
 MacosVersion GetMacosVersion() {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
+    if (!cached_macos_version) {
         cached_macos_version = GetMacosVersionInternal();
-    });
+    }
     return cached_macos_version;
 }
 
-malloc_zone_t sanitizer_zone_DO_NOT_USE;
+malloc_zone_t internal_sanitizer_zone;
 malloc_zone_t *orig_default_zone;
-
-unsigned long GetPageSize() {
-    return sysconf(_SC_PAGESIZE);
-}
-
-static unsigned long sPageSize = 0;
-
-unsigned long GetPageSizeCached() {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        sPageSize = GetPageSize();
-    });
-    return sPageSize;
-}
 
 unsigned long RoundUpTo(unsigned long size, unsigned long boundary) {
     return (size + boundary - 1) & ~(boundary - 1);
 }
 
-void ReplaceSystemMalloc(void);
+static void ReplaceSystemMallocIfNecessary(void);
 
+// Mark this a constructor so that it's run early on. Asan runs this setup in a constructor as well
 static malloc_zone_t *defaultZone() {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        ReplaceSystemMalloc();
-    });
-    return &sanitizer_zone_DO_NOT_USE;
+    ReplaceSystemMallocIfNecessary();
+    return &internal_sanitizer_zone;
 }
 
-malloc_zone_t *originalDefaultZone() {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
+static long sInternalPageSize;
+
+static long pageSize() {
+    if (!sInternalPageSize) {
+        sInternalPageSize = sysconf(_SC_PAGESIZE);
+    }
+    return sInternalPageSize;
+}
+
+typedef enum {
+    LazyBooleanUninited = 0,
+    LazyBooleanFalse,
+    LazyBooleanTrue
+} LazyBoolean;
+
+static LazyBoolean sInternalUseJemalloc = LazyBooleanUninited;
+
+// Gets set by dyld
+extern double dyldVersionNumber;
+
+static double dyldMaxVersionNumber = 10000;
+static const char *maxKernel = "18.0.0";
+
+bool copyInKernelVersion(char buffer[_SYS_NAMELEN]) {
+    struct utsname u = {0};
+    int res = uname(&u);
+    if (res) {
+        strcpy(buffer, u.release);
+        return true;
+    } else {
+        return false;
+    }
+}
+
+// Signal interrupts could cause the file operations here to fail, but oh well
+int openOsVersionFile(int mode) {
+    const char *home = getenv("HOME");
+    size_t homeLength = strlen(home);
+    const char *name = "jemalloc_os_version.txt";
+    size_t nameLength = strlen(name);
+    size_t length = homeLength + nameLength + 1 /*separator*/ + 1 /*null terminator*/;
+    char path[length];
+    strcpy(path, home);
+    path[homeLength] = '/';
+    strcpy(&(path[homeLength + 1]), name);
+    path[homeLength + nameLength + 1] = '\0';
+    return open(path, mode);
+}
+
+void writeEnvironmentToDisk() {
+    int fd = openOsVersionFile(O_TRUNC | O_WRONLY | O_CREAT);
+    if (fd == -1) {
+        return;
+    }
+    int bytesWritten = write(fd, &dyldVersionNumber, sizeof(dyldVersionNumber));
+    if (bytesWritten == sizeof(dyldVersionNumber)) {
+        char kernelVersion[_SYS_NAMELEN] = {0};
+        copyInKernelVersion(kernelVersion);
+        size_t kernelVersionLength = strlen(kernelVersion) + 1;
+        write(fd, kernelVersion, kernelVersionLength);
+        // Uncomment this line to update this info
+        // printf("dyld version: %lf, kernel version: %s\n", dyldVersionNumber, kernelVersion);
+    }
+    close(fd);
+}
+
+static void versionFileIsCurrent() {
+    bool fileSuccess = false;
+    int fd = openOsVersionFile(O_RDONLY);
+    if (fd != -1) {
+        sInternalUseJemalloc = LazyBooleanFalse;
+        fileSuccess = true;
+        char newKernelVersion[_SYS_NAMELEN] = {0};
+        read(fd, newKernelVersion, sizeof(newKernelVersion));
+        char oldKernelVersion[_SYS_NAMELEN] = {0};
+        copyInKernelVersion(oldKernelVersion);
+        if (strcmp(newKernelVersion, oldKernelVersion) >= 0) {
+            fileSuccess = true;
+        }
+    }
+    close(fd);
+}
+
+// jemalloc is built with a specific page size: 16kb, i.e. 2 ** 14
+// this has been the page size for iPhones for years, but in the future it's possible that Apple could change it
+// it also may be possible for a binary to be built with a different page size
+static inline bool useJemalloc() {
+    if (unlikely(sInternalUseJemalloc == LazyBooleanUninited)) {
+        // fix this
+        sInternalUseJemalloc = (pageSize() == (1 << 14)) ? LazyBooleanTrue : LazyBooleanFalse;
+        if (sInternalUseJemalloc == LazyBooleanFalse) {
+            // Don't use printf, NSLog, etc., because they may call malloc themselves
+            const char *warning = "Warning: jemalloc only works with a page size of 16kb, using the system allocator instead\n";
+            write(STDOUT_FILENO, warning, sizeof(warning) - 1);
+        }
+    }
+    return sInternalUseJemalloc == LazyBooleanTrue;
+}
+
+static malloc_zone_t *originalDefaultZone() {
+    if (!orig_default_zone) {
         malloc_default_zone(); // Causes originalDefaultZone to get set up
-    });
+    }
     return orig_default_zone;
 }
 
-INTERCEPTOR(malloc_zone_t *, malloc_create_zone,
-            vm_size_t start_size, unsigned zone_flags) {
-    unsigned long page_size = GetPageSizeCached();
+INTERCEPTOR_RETURN(malloc_zone_t *, malloc_create_zone,
+            vm_size_t, start_size, unsigned, zone_flags)
+    unsigned long page_size = pageSize();
     unsigned long allocated_size = RoundUpTo(sizeof(malloc_zone_t), page_size);
     void *p = NULL;
     posix_memalign(&p, page_size, allocated_size);
@@ -378,11 +504,11 @@ INTERCEPTOR(malloc_zone_t *, malloc_create_zone,
     return new_zone;
 }
 
-INTERCEPTOR(void, malloc_destroy_zone, malloc_zone_t *zone) {
-    // We don't need to do anything here.  We're not registering new zones, so we
+INTERCEPTOR_VOID(void, malloc_destroy_zone, malloc_zone_t *, zone)
+    // We don't need to do anything here.  We're not registering nw zones, so we
     // don't to unregister.  Just un-mprotect and free() the zone.
     if (GetMacosVersion() >= MACOS_VERSION_LION) {
-        unsigned long page_size = GetPageSizeCached();
+        unsigned long page_size = pageSize();
         unsigned long allocated_size = RoundUpTo(sizeof(malloc_zone_t), page_size);
         mprotect(zone, allocated_size, PROT_READ | PROT_WRITE);
     }
@@ -392,23 +518,25 @@ INTERCEPTOR(void, malloc_destroy_zone, malloc_zone_t *zone) {
     free(zone);
 }
 
-INTERCEPTOR(malloc_zone_t *, malloc_default_zone, void) {
-    orig_default_zone = malloc_default_zone();
+INTERCEPTOR_RETURN(malloc_zone_t *, malloc_default_zone, void)
+    if (!orig_default_zone) {
+        orig_default_zone = malloc_default_zone();
+    }
     return defaultZone();
 }
 
-INTERCEPTOR(malloc_zone_t *, malloc_default_purgeable_zone, void) {
+INTERCEPTOR_RETURN(malloc_zone_t *, malloc_default_purgeable_zone, void)
     // FIXME: ASan should support purgeable allocations.
     // https://github.com/google/sanitizers/issues/139
     return defaultZone();
 }
 
-INTERCEPTOR(void, malloc_make_purgeable, void *ptr) {
+INTERCEPTOR_VOID(void, malloc_make_purgeable, void *, ptr)
     // FIXME: ASan should support purgeable allocations. Ignoring them is fine
     // for now.
 }
 
-INTERCEPTOR(int, malloc_make_nonpurgeable, void *ptr) {
+INTERCEPTOR_RETURN(int, malloc_make_nonpurgeable, void *, ptr)
     // FIXME: ASan should support purgeable allocations. Ignoring them is fine
     // for now.
     // Must return 0 if the contents were not purged since the last call to
@@ -417,32 +545,34 @@ INTERCEPTOR(int, malloc_make_nonpurgeable, void *ptr) {
 }
 
 // Functions with special handling in their zone counterparts go through those
-INTERCEPTOR(void, free, void *ptr) {
+INTERCEPTOR_VOID(void, free, void *, ptr)
     zone_free(NULL, ptr);
 }
 
-INTERCEPTOR(void *, realloc, void *ptr, size_t size) {
+INTERCEPTOR_RETURN(void *, realloc, void *, ptr, size_t, size)
     return zone_realloc(NULL, ptr, size);
 }
 
 // Other functions call directly in and don't go through a zone fn
-INTERCEPTOR(void *, malloc, size_t size) {
+INTERCEPTOR_RETURN(void *, malloc, size_t, size)
     return je_malloc(size);
 }
 
-INTERCEPTOR(void *, calloc, size_t nmemb, size_t size) {
+INTERCEPTOR_RETURN(void *, calloc, size_t, nmemb, size_t, size)
+    if (atomic_load_explicit(&sMallocWasReplaced, memory_order_acquire)) {
+    }
     return je_calloc(nmemb, size);
 }
 
-INTERCEPTOR(void *, valloc, size_t size) {
+INTERCEPTOR_RETURN(void *, valloc, size_t, size)
     return je_valloc(size);
 }
 
-INTERCEPTOR(size_t, malloc_good_size, size_t size) {
+INTERCEPTOR_RETURN(size_t, malloc_good_size, size_t, size)
     return zone_good_size(NULL, size);
 }
 
-INTERCEPTOR(int, posix_memalign, void **memptr, size_t alignment, size_t size) {
+INTERCEPTOR_RETURN(int, posix_memalign, void **, memptr, size_t, alignment, size_t, size)
     return je_posix_memalign(memptr, alignment, size);
 }
 
@@ -454,42 +584,52 @@ static kern_return_t zone_enumerator(task_t task, void *p,
     return KERN_FAILURE;
 }
 
-void ReplaceSystemMalloc() {
-#define sanitizer_zone sanitizer_zone_DO_NOT_USE
-    static malloc_introspection_t sanitizer_zone_introspection;
-    memset(&sanitizer_zone_introspection, 0,
-                    sizeof(sanitizer_zone_introspection));
+static inline void ReplaceSystemMallocIfNecessary() {
+    if (atomic_load_explicit(&sMallocWasReplaced, memory_order_acquire)) {
+        return;
+    }
 
-    sanitizer_zone_introspection.enumerator = &zone_enumerator;
-    sanitizer_zone_introspection.good_size = &zone_good_size;
-    sanitizer_zone_introspection.check = &zone_check;
-    sanitizer_zone_introspection.print = &zone_print;
-    sanitizer_zone_introspection.log = &zone_log;
-    sanitizer_zone_introspection.force_lock = &zone_force_lock;
-    sanitizer_zone_introspection.force_unlock = &zone_force_unlock;
-    sanitizer_zone_introspection.statistics = &zone_statistics;
-    sanitizer_zone_introspection.zone_locked = &zone_locked;
+    pthread_mutex_lock(&replaceSystemMallocLock);
+    ({
+        if (atomic_load_explicit(&sMallocWasReplaced, memory_order_relaxed)) {
+            return;
+        }
+        atomic_store_explicit(&sMallocWasReplaced, true, memory_order_release);
+        static malloc_introspection_t sanitizer_zone_introspection;
+        memset(&sanitizer_zone_introspection, 0,
+                        sizeof(sanitizer_zone_introspection));
 
-    memset(&sanitizer_zone, 0, sizeof(malloc_zone_t));
+        sanitizer_zone_introspection.enumerator = &zone_enumerator;
+        sanitizer_zone_introspection.good_size = &zone_good_size;
+        sanitizer_zone_introspection.check = &zone_check;
+        sanitizer_zone_introspection.print = &zone_print;
+        sanitizer_zone_introspection.log = &zone_log;
+        sanitizer_zone_introspection.force_lock = &zone_force_lock;
+        sanitizer_zone_introspection.force_unlock = &zone_force_unlock;
+        sanitizer_zone_introspection.statistics = &zone_statistics;
+        sanitizer_zone_introspection.zone_locked = &zone_locked;
 
-    // Use version 6 for OSX >= 10.6.
-    sanitizer_zone.version = 6;
-    sanitizer_zone.zone_name = "jemalloc_zone";
-    sanitizer_zone.size = &zone_size;
-    sanitizer_zone.malloc = &zone_malloc;
-    sanitizer_zone.calloc = &zone_calloc;
-    sanitizer_zone.valloc = &zone_valloc;
-    sanitizer_zone.free = &zone_free;
-    sanitizer_zone.realloc = &zone_realloc;
-    sanitizer_zone.destroy = &zone_destroy;
-    sanitizer_zone.batch_malloc = 0;
-    sanitizer_zone.batch_free = 0;
-    sanitizer_zone.free_definite_size = 0;
-    sanitizer_zone.memalign = &zone_memalign;
-    sanitizer_zone.introspect = &sanitizer_zone_introspection;
-    // claimed address?
+        memset(&internal_sanitizer_zone, 0, sizeof(malloc_zone_t));
 
-    // Register the zone.
-    malloc_zone_register(&sanitizer_zone);
-#undef sanitizer_zone
+        // Use version 6 for OSX >= 10.6.
+        internal_sanitizer_zone.version = 6;
+        internal_sanitizer_zone.zone_name = "jemalloc_zone";
+        internal_sanitizer_zone.size = &zone_size;
+        internal_sanitizer_zone.malloc = &zone_malloc;
+        internal_sanitizer_zone.calloc = &zone_calloc;
+        internal_sanitizer_zone.valloc = &zone_valloc;
+        internal_sanitizer_zone.free = &zone_free;
+        internal_sanitizer_zone.realloc = &zone_realloc;
+        internal_sanitizer_zone.destroy = &zone_destroy;
+        internal_sanitizer_zone.batch_malloc = 0;
+        internal_sanitizer_zone.batch_free = 0;
+        internal_sanitizer_zone.free_definite_size = 0;
+        internal_sanitizer_zone.memalign = &zone_memalign;
+        internal_sanitizer_zone.introspect = &sanitizer_zone_introspection;
+        // claimed address?
+
+        // Register the zone.
+        malloc_zone_register(&internal_sanitizer_zone);
+    });
+    pthread_mutex_unlock(&replaceSystemMallocLock);
 }
