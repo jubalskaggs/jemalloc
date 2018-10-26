@@ -249,6 +249,11 @@ zone_reinit_lock(malloc_zone_t *zone) {
 	zone_force_unlock(zone);
 }
 
+static void
+zone_free_definite_size(malloc_zone_t *zone, void *ptr, size_t size) {
+    zone_free(zone, ptr);
+}
+
 // Just a pair of pointers.
 struct interpose_substitution {
     const void *replacement;
@@ -320,11 +325,11 @@ typedef enum {
     MACOS_VERSION_UNKNOWN_NEWER
 } MacosVersion;
 
-MacosVersion GetMacosVersion(void);
+static MacosVersion GetMacosVersion(void);
 
-MacosVersion cached_macos_version = MACOS_VERSION_UNINITIALIZED;
+static MacosVersion cached_macos_version = MACOS_VERSION_UNINITIALIZED;
 
-MacosVersion GetMacosVersionInternal() {
+static MacosVersion GetMacosVersionInternal() {
     int mib[2] = { CTL_KERN, KERN_OSRELEASE };
     char version[100];
     unsigned long len = 0, maxlen = sizeof(version) / sizeof(version[0]);
@@ -359,17 +364,17 @@ MacosVersion GetMacosVersionInternal() {
     }
 }
 
-MacosVersion GetMacosVersion() {
+static MacosVersion GetMacosVersion() {
     if (!cached_macos_version) {
         cached_macos_version = GetMacosVersionInternal();
     }
     return cached_macos_version;
 }
 
-malloc_zone_t internal_sanitizer_zone;
+static malloc_zone_t internal_sanitizer_zone;
 malloc_zone_t *orig_default_zone;
 
-unsigned long RoundUpTo(unsigned long size, unsigned long boundary) {
+static unsigned long RoundUpTo(unsigned long size, unsigned long boundary) {
     return (size + boundary - 1) & ~(boundary - 1);
 }
 
@@ -401,19 +406,19 @@ static LazyBoolean sInternalUseJemalloc = LazyBooleanUninited;
 // Gets set by dyld
 extern double dyldVersionNumber;
 
-static double maxDyldVersionNumber = 625.110000 + 0.000001; // Give it a bit extra to be safe
+static double maxDyldVersionNumber = 625.11 + 0.000001; // Give it a bit extra to be safe
 static const char *maxKernelVersion = "18.0.0";
 
 // Run this in the debugger to see what it is for your iPhone
+// Note that you call it with "je_" at the start, i.e. "je_printEnvironment();"
 __used void printEnvironment() {
-    struct utsname u = {0};
-    int res = uname(&u);
+    struct utsname u = {{0}};
+    uname(&u);
     printf("%lf, %s", dyldVersionNumber, u.release);
 }
 
 static bool environmentIsWithinMax() {
-    struct utsname u = {0};
-    char buffer[_SYS_NAMELEN];
+    struct utsname u = {{0}};
     int res = uname(&u);
     if (res == -1) {
         return false;
@@ -446,36 +451,36 @@ static malloc_zone_t *originalDefaultZone() {
 }
 
 INTERCEPTOR_RETURN(malloc_zone_t *, malloc_create_zone,
-            vm_size_t, start_size, unsigned, zone_flags)
-    unsigned long page_size = pageSize();
-    unsigned long allocated_size = RoundUpTo(sizeof(malloc_zone_t), page_size);
-    void *p = NULL;
-    posix_memalign(&p, page_size, allocated_size);
-    malloc_zone_t *new_zone = (malloc_zone_t *)p;
-    memcpy(new_zone, defaultZone(), sizeof(malloc_zone_t));
-    new_zone->zone_name = NULL;  // The name will be changed anyway.
-    if (GetMacosVersion() >= MACOS_VERSION_LION) {
-        // Prevent the client app from overwriting the zone contents.
-        // Library functions that need to modify the zone will set PROT_WRITE on it.
-        // This matches the behavior of malloc_create_zone() on OSX 10.7 and higher.
-        mprotect(new_zone, allocated_size, PROT_READ);
-    }
-    // We're explicitly *NOT* registering the zone.
-    return new_zone;
+                             vm_size_t, start_size, unsigned, zone_flags)
+  size_t page_size = pageSize();
+  size_t allocated_size = RoundUpTo(sizeof(internal_sanitizer_zone), page_size);
+  void *p = NULL;
+  posix_memalign(&p, page_size, allocated_size);
+  malloc_zone_t *new_zone = (malloc_zone_t *)p;
+  memcpy(new_zone, &internal_sanitizer_zone, sizeof(internal_sanitizer_zone));
+  new_zone->zone_name = NULL;  // The name will be changed anyway.
+  if (GetMacosVersion() >= MACOS_VERSION_LION) {
+    // Prevent the client app from overwriting the zone contents.
+    // Library functions that need to modify the zone will set PROT_WRITE on it.
+    // This matches the behavior of malloc_create_zone() on OSX 10.7 and higher.
+    mprotect(new_zone, allocated_size, PROT_READ);
+  }
+  // We're explicitly *NOT* registering the zone.
+  return new_zone;
 }
 
 INTERCEPTOR_VOID(void, malloc_destroy_zone, malloc_zone_t *, zone)
-    // We don't need to do anything here.  We're not registering nw zones, so we
-    // don't to unregister.  Just un-mprotect and free() the zone.
-    if (GetMacosVersion() >= MACOS_VERSION_LION) {
-        unsigned long page_size = pageSize();
-        unsigned long allocated_size = RoundUpTo(sizeof(malloc_zone_t), page_size);
-        mprotect(zone, allocated_size, PROT_READ | PROT_WRITE);
-    }
-    if (zone->zone_name) {
-        free((void *)zone->zone_name);
-    }
-    free(zone);
+  // We don't need to do anything here.  We're not registering new zones, so we
+  // don't to unregister.  Just un-mprotect and free() the zone.
+  if (GetMacosVersion() >= MACOS_VERSION_LION) {
+    size_t page_size = pageSize();
+    size_t allocated_size = RoundUpTo(sizeof(internal_sanitizer_zone), page_size);
+    mprotect(zone, allocated_size, PROT_READ | PROT_WRITE);
+  }
+  if (zone->zone_name) {
+    free((void *)zone->zone_name);
+  }
+  free(zone);
 }
 
 INTERCEPTOR_RETURN(malloc_zone_t *, malloc_default_zone, void)
@@ -515,7 +520,6 @@ INTERCEPTOR_RETURN(void *, realloc, void *, ptr, size_t, size)
 
 // Other functions call directly in and don't go through a zone fn
 INTERCEPTOR_RETURN(void *, malloc, size_t, size)
-    abort();
     return je_malloc(size);
 }
 
@@ -545,6 +549,8 @@ static kern_return_t zone_enumerator(task_t task, void *p,
     return KERN_FAILURE;
 }
 
+static const char sJemallocName[] = "jemalloc_zone";
+
 static inline void ReplaceSystemMallocIfNecessary() {
     if (atomic_load_explicit(&sMallocWasReplaced, memory_order_acquire)) {
         return;
@@ -569,24 +575,31 @@ static inline void ReplaceSystemMallocIfNecessary() {
         sanitizer_zone_introspection.force_unlock = &zone_force_unlock;
         sanitizer_zone_introspection.statistics = &zone_statistics;
         sanitizer_zone_introspection.zone_locked = &zone_locked;
+        sanitizer_zone_introspection.reinit_lock = &zone_reinit_lock;
 
         memset(&internal_sanitizer_zone, 0, sizeof(malloc_zone_t));
 
+        // Use a malloc'd version of the name because in malloc_zone_set_name, it tries to free the old one
+        char *name = je_malloc(strlen(sJemallocName) + 1);
+        strcpy(name, sJemallocName);
+
         // Use version 6 for OSX >= 10.6.
         internal_sanitizer_zone.version = 6;
-        internal_sanitizer_zone.zone_name = "jemalloc_zone";
+        internal_sanitizer_zone.zone_name = name;
         internal_sanitizer_zone.size = &zone_size;
         internal_sanitizer_zone.malloc = &zone_malloc;
         internal_sanitizer_zone.calloc = &zone_calloc;
         internal_sanitizer_zone.valloc = &zone_valloc;
+        internal_sanitizer_zone.pressure_relief = &zone_pressure_relief;
         internal_sanitizer_zone.free = &zone_free;
         internal_sanitizer_zone.realloc = &zone_realloc;
-        internal_sanitizer_zone.destroy = &zone_destroy;
-        internal_sanitizer_zone.batch_malloc = 0;
-        internal_sanitizer_zone.batch_free = 0;
-        internal_sanitizer_zone.free_definite_size = 0;
+        // The batch fns were not in the asan version, but it caused problems for me not to have them, so let's use the ones jemalloc had
+        internal_sanitizer_zone.batch_malloc = &zone_batch_malloc;
+        internal_sanitizer_zone.batch_free = &zone_batch_free;
+        internal_sanitizer_zone.free_definite_size = &zone_free_definite_size;
         internal_sanitizer_zone.memalign = &zone_memalign;
         internal_sanitizer_zone.introspect = &sanitizer_zone_introspection;
+        internal_sanitizer_zone.destroy = &zone_destroy;
         // claimed address?
 
         // Register the zone.

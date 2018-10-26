@@ -1961,9 +1961,7 @@ JE_COMPILABLE([Darwin os_unfair_lock_*()], [
 	os_unfair_lock_unlock(&lock);
 	#endif
 ], [je_cv_os_unfair_lock])
-if test "x${je_cv_os_unfair_lock}" = "xyes" ; then
-  AC_DEFINE([JEMALLOC_OS_UNFAIR_LOCK], [ ])
-fi
+AC_DEFINE([JEMALLOC_OS_UNFAIR_LOCK], [ ])
 
 dnl ============================================================================
 dnl Check for spinlock(3) operations as provided on Darwin.
