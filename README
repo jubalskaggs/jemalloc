@@ -22,4 +22,4 @@ You can add the `testing.{c,h}` files from this repo to your project and call `J
 
 ## Tuning
 
-The main jemalloc repo offers additional info about [building](https://github.com/jemalloc/jemalloc/blob/dev/INSTALL.md) and [tuning](https://github.com/jemalloc/jemalloc/blob/dev/TUNING.md).
+The main jemalloc repo offers additional info about (building)[https://github.com/jemalloc/jemalloc/blob/dev/INSTALL.md] and (tuning)[https://github.com/jemalloc/jemalloc/blob/dev/TUNING.md].
