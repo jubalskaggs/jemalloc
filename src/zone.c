@@ -411,11 +411,11 @@ static const char *maxKernelVersion = "18.0.0";
 
 // Run this in the debugger to see what it is for your iPhone
 // Note that you call it with "je_" at the start, i.e. "je_printEnvironment();"
-__used void printEnvironment() {
+/*void printEnvironment() {
     struct utsname u = {{0}};
     uname(&u);
     printf("%lf, %s", dyldVersionNumber, u.release);
-}
+}*/
 
 static bool environmentIsWithinMax() {
     struct utsname u = {{0}};
