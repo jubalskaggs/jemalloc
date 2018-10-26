@@ -5,7 +5,7 @@ Dir.chdir(__dir__)
 
 dev = `xcode-select --print-path 2>/dev/null`.chomp
 
-debug = true # ARGV.include?("--debug")
+debug = ARGV.include?("--debug")
 
 archs = debug ? ["arm64"] : ["x86_64", "arm64"]
 
