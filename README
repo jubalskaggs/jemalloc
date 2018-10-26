@@ -20,6 +20,6 @@ This library has a mechanism specifically for that. In `src/zone.c`, the `maxDyl
 
 You can add the `testing.{c,h}` files from this repo to your project and call `JERunTests()` to do unit testing.
 
-## Tuning
+## Tuning and other configurations
 
-The main jemalloc repo offers additional info about [building](https://github.com/jemalloc/jemalloc/blob/dev/INSTALL.md) and [tuning](https://github.com/jemalloc/jemalloc/blob/dev/TUNING.md).
+The main jemalloc repo offers additional info about building at https://github.com/jemalloc/jemalloc/blob/dev/INSTALL.md and tuning at https://github.com/jemalloc/jemalloc/blob/dev/TUNING.md .
