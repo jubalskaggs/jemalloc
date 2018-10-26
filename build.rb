@@ -41,7 +41,7 @@ archs.each do |arch|
   ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -miphoneos-version-min=#{min_version}"
   ENV["LDFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -Wl,-install_name,@rpath/libjemalloc.2.dylib -Wl,-dead_strip -miphoneos-version-min=#{min_version}"
 
-  cmd = debug ? "make -j 4" : "make clean && ./configure --disable-cxx --disable-syscall --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
+  cmd = debug ? "make -j 4" : "make clean && ./configure --disable-cxx --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
   success = run(cmd)
   raise "Failure" unless success
   `cp #{$static_lib_path} #{tmp_static_lib_path(arch)}`
