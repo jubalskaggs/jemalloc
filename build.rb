@@ -29,7 +29,6 @@ end
 
 puts "Using #{min_version} as the minimum iOS version, feel free to change min_version in the code to something else\n\n"
 
-ENV.delete_if { true }
 archs.each do |arch|
   sdk = {"arm64" => "iphoneos", "x86_64" => "iphonesimulator"}[arch]
   sdk_root = `xcodebuild -version -sdk #{sdk} 2>/dev/null`.split("\n").detect do |line|
@@ -41,7 +40,7 @@ archs.each do |arch|
   ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -miphoneos-version-min=#{min_version}"
   ENV["LDFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -Wl,-install_name,@rpath/libjemalloc.2.dylib -Wl,-dead_strip -miphoneos-version-min=#{min_version}"
 
-  cmd = debug ? "make -j 4" : "make clean ; autogen.sh && ./configure --disable-cxx --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
+  cmd = debug ? "make -j 4" : "make clean ; ./autogen.sh ; ./configure --disable-cxx --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
   success = run(cmd)
   raise "Failure" unless success
   `cp #{$static_lib_path} #{tmp_static_lib_path(arch)}`
