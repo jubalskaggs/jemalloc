@@ -406,9 +406,6 @@ static LazyBoolean sInternalUseJemalloc = LazyBooleanUninited;
 // Gets set by dyld
 extern double dyldVersionNumber;
 
-static double maxDyldVersionNumber = 625.11 + 0.000001; // Give it a bit extra to be safe
-static const char *maxKernelVersion = "18.0.0";
-
 // Run this in the debugger to see what it is for your iPhone
 // Note that you call it with "je_" at the start, i.e. "je_printEnvironment();"
 /*void printEnvironment() {
@@ -417,6 +414,10 @@ static const char *maxKernelVersion = "18.0.0";
     printf("%lf, %s", dyldVersionNumber, u.release);
 }*/
 
+// Uncomment the section below to turn on gating, and then remove the dummy version of the function below that
+/*static double maxDyldVersionNumber = 625.11 + 0.000001; // Give it a bit extra to be safe
+static const char *maxKernelVersion = "18.0.0";
+
 static bool environmentIsWithinMax() {
     struct utsname u = {{0}};
     int res = uname(&u);
@@ -424,6 +425,10 @@ static bool environmentIsWithinMax() {
         return false;
     }
     return maxDyldVersionNumber >= dyldVersionNumber && strcmp(maxKernelVersion, u.release) >= 0;
+}*/
+
+static bool environmentIsWithinMax() {
+    return true;
 }
 
 // jemalloc is built with a specific page size: 16kb, i.e. 2 ** 14
