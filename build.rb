@@ -6,6 +6,7 @@ Dir.chdir(__dir__)
 dev = `xcode-select --print-path 2>/dev/null`.chomp
 
 debug = ARGV.include?("--debug")
+bitcode = ARGV.include?("--bitcode")
 
 archs = debug ? ["arm64"] : ["arm64", "x86_64"]
 
@@ -37,8 +38,15 @@ archs.each do |arch|
   ENV["CC"]= "#{dev}/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
   ENV["CXX"] = ENV["CC"] + "++"
 
-  ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -miphoneos-version-min=#{min_version}"
-  ENV["LDFLAGS"] = "-isysroot #{sdk_root} -arch #{arch} -Wl,-install_name,@rpath/libjemalloc.2.dylib -Wl,-dead_strip -miphoneos-version-min=#{min_version}"
+  c_flags = "-isysroot #{sdk_root} -arch #{arch} -miphoneos-version-min=#{min_version}"
+  ld_flags = "-isysroot #{sdk_root} -arch #{arch} -Wl,-install_name,@rpath/libjemalloc.2.dylib -Wl,-dead_strip -miphoneos-version-min=#{min_version}"
+  if bitcode
+    bitcode_flag = "-fembed-bitcode-marker"
+    c_flags += " #{bitcode_flag}"
+    ld_flags += " #{bitcode_flag}"
+  end
+  ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = c_flags
+  ENV["LDFLAGS"] = ld_flags
 
   cmd = debug ? "make -j 4" : "make clean ; ./autogen.sh ; ./configure --disable-cxx --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
   success = run(cmd)
