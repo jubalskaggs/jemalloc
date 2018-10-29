@@ -4,7 +4,7 @@ Jemalloc is a popular allocator that is supported by Facebook. In this fork of i
 
 ## Building
 
-Run `./build.rb` and it will output a dynamic library to `lib/libjemalloc.2.dylib` and a static library to `lib/libjemalloc_pic.a`
+Run `./build.rb` and it will output a dynamic library to `lib/libjemalloc.2.dylib` and a static library to `lib/libjemalloc_pic.a`. By default it does not include bitcode, but you can add the `--bitcode` flag to `./build.rb` to support it.
 
 ## Usage
 
