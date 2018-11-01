@@ -7,6 +7,7 @@ dev = `xcode-select --print-path 2>/dev/null`.chomp
 
 debug = ARGV.include?("--debug")
 bitcode = ARGV.include?("--bitcode")
+replace_malloc = !ARGV.include?("--no-replace")
 
 archs = debug ? ["arm64"] : ["arm64", "x86_64"]
 
@@ -48,7 +49,8 @@ archs.each do |arch|
   ENV["EXTRA_CFLAGS"] = ENV["CXXFLAGS"] = c_flags
   ENV["LDFLAGS"] = ld_flags
 
-  cmd = debug ? "make -j 4" : "make clean ; ./autogen.sh ; ./configure --disable-cxx --enable-zone-allocator --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
+  zone_flag = replace_malloc ? "--enable-zone-allocator" : "--disable-zone-allocator"
+  cmd = debug ? "make -j 4" : "make clean ; ./autogen.sh ; ./configure --disable-cxx #{zone_flag} --with-lg-page=14 --host=#{triple} --target=#{triple} && make -j 4"
   success = run(cmd)
   raise "Failure" unless success
   `cp #{$static_lib_path} #{tmp_static_lib_path(arch)}`
